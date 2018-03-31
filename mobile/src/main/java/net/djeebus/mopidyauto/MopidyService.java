@@ -102,7 +102,15 @@ public class MopidyService extends MediaBrowserServiceCompat {
             return;
         }
 
-        client = new MopidyClient();
+        client = new MopidyClient() {
+
+            @Override
+            protected void onClosed() {
+                Log.i(TAG, "Mopidy client closed, reopening");
+
+                this.open(host);
+            }
+        };
         client.setEventListener(this::onEvent);
         client.open(host);
 
@@ -140,12 +148,16 @@ public class MopidyService extends MediaBrowserServiceCompat {
         });
     }
 
+    private void sendPlaybackState() {
+        this.stateBuilder.setState(this.playbackState, this.position, PLAYBACK_SPEED);
+        mSession.setPlaybackState(stateBuilder.build());
+    }
+
     private void onEvent(String event, JsonObject jsonObject) {
         switch (event) {
             case "seeked":
                 this.position = jsonObject.get("time_position").getAsLong();
-                this.stateBuilder.setState(this.playbackState, this.position, PLAYBACK_SPEED);
-                mSession.setPlaybackState(stateBuilder.build());
+                sendPlaybackState();
                 break;
 
             case "volume_changed":
@@ -160,6 +172,9 @@ public class MopidyService extends MediaBrowserServiceCompat {
             case "playback_state_changed":
                 String newState = jsonObject.get("new_state").getAsString();
                 this.playbackState = translateState(newState);
+                sendPlaybackState();
+
+                refreshCurrentTrack();
                 break;
 
             case "options_changed":
@@ -179,6 +194,11 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
     void refreshCurrentTrack() {
         client.request("core.playback.get_current_tl_track", response -> {
+            if (response.isJsonNull()) {
+                mSession.setMetadata(null);
+                return;
+            }
+
             JsonObject track = response.getAsJsonObject().get("track").getAsJsonObject();
             String trackId = track.get("uri").getAsString();
 
@@ -244,11 +264,16 @@ public class MopidyService extends MediaBrowserServiceCompat {
         });
     }
 
-    public static Bitmap getBitmapFromURL(String src) {
+    public Bitmap getBitmapFromURL(String src) {
         Log.i(TAG, "Downloading album art: " + src);
         try {
-            URL url = new URL(src);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            Uri uri = Uri.parse(this.host)
+                    .buildUpon()
+                    .scheme("http")
+                    .encodedPath(src)
+                    .build();
+
+            HttpURLConnection connection = (HttpURLConnection) new URL(uri.toString()).openConnection();
             connection.setDoInput(true);
             connection.connect();
             InputStream input = connection.getInputStream();
@@ -451,6 +476,14 @@ public class MopidyService extends MediaBrowserServiceCompat {
             Log.i(TAG, "onPause");
 
             client.request("core.playback.pause");
+
+            if (playbackState == PlaybackState.STATE_PLAYING) {
+                playbackState = PlaybackState.STATE_PAUSED;
+            } else {
+                playbackState = PlaybackState.STATE_PLAYING;
+            }
+
+            sendPlaybackState();
         }
 
         @Override
@@ -458,6 +491,9 @@ public class MopidyService extends MediaBrowserServiceCompat {
             Log.i(TAG, "onStop");
 
             client.request("core.playback.stop");
+
+            playbackState = PlaybackState.STATE_STOPPED;
+            sendPlaybackState();
         }
 
         @Override

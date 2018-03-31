@@ -12,14 +12,13 @@ import okio.ByteString;
 
 import java.util.HashMap;
 
-public class MopidyClient {
+public abstract class MopidyClient {
     private final String TAG = "MopidyClient";
 
     private final HashMap<Integer, MopidyCallback> callbacks = new HashMap<>();
     private EventListener eventListener;
 
     private WebSocket webSocket;
-    private String host;
 
     public interface EventListener {
         void onEvent(String event, JsonObject message);
@@ -28,6 +27,8 @@ public class MopidyClient {
     public void setEventListener(EventListener eventListener) {
         this.eventListener = eventListener;
     }
+
+    protected abstract void onClosed();
 
     private class MopidyListener extends WebSocketListener {
         @Override
@@ -40,6 +41,7 @@ public class MopidyClient {
         public void onClosed(WebSocket webSocket, int code, String reason) {
             Log.i(TAG, "onClosed");
             MopidyClient.this.webSocket = null;
+            MopidyClient.this.onClosed();
         }
 
         @Override
@@ -55,10 +57,7 @@ public class MopidyClient {
                 Log.e(TAG, "onFailure: " + response.message());
             }
 
-            if (host != null) {
-                // try again!
-                open(host);
-            }
+            MopidyClient.this.close();
 
             super.onFailure(webSocket, t, response);
         }
@@ -123,8 +122,6 @@ public class MopidyClient {
     }
 
     public void close() {
-        this.host = null;
-
         if (this.webSocket == null) {
             return;
         }

@@ -77,7 +77,12 @@ public class ConnectActivity extends Activity {
             return;
         }
 
-        client = new MopidyClient();
+        client = new MopidyClient() {
+            @Override
+            protected void onClosed() {
+                Log.i(TAG, "Failed to connect");
+            }
+        };
 
         resolveListener = createResolveListener();
         discoveryListener = createDiscoveryListener();
