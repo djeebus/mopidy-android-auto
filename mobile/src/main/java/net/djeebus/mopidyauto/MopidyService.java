@@ -48,8 +48,9 @@ public class MopidyService extends MediaBrowserServiceCompat {
     private MopidyClient client;
     private String host;
 
-    int playbackState = PlaybackState.STATE_STOPPED;
+    int playbackState = PlaybackState.STATE_PAUSED;
     long position = 0;
+    long tlid = 1;
 
     PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
             .setActions(
@@ -64,7 +65,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
         switch (state) {
             case "playing": return PlaybackStateCompat.STATE_PLAYING;
             case "paused": return PlaybackStateCompat.STATE_PAUSED;
-            case "stopped": return PlaybackStateCompat.STATE_STOPPED;
+            case "stopped": return PlaybackStateCompat.STATE_PAUSED;
             default: return PlaybackStateCompat.STATE_NONE;
         }
     }
@@ -264,16 +265,10 @@ public class MopidyService extends MediaBrowserServiceCompat {
         });
     }
 
-    public Bitmap getBitmapFromURL(String src) {
-        Log.i(TAG, "Downloading album art: " + src);
+    public Bitmap getBitmapFromURL(String uri) {
+        Log.i(TAG, "Downloading album art: " + uri);
         try {
-            Uri uri = Uri.parse(this.host)
-                    .buildUpon()
-                    .scheme("http")
-                    .encodedPath(src)
-                    .build();
-
-            HttpURLConnection connection = (HttpURLConnection) new URL(uri.toString()).openConnection();
+            HttpURLConnection connection = (HttpURLConnection) new URL(uri).openConnection();
             connection.setDoInput(true);
             connection.connect();
             InputStream input = connection.getInputStream();
@@ -340,8 +335,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
     private MediaDescriptionCompat buildMediaDescription(JsonObject object) {
         MediaDescriptionCompat.Builder builder = new MediaDescriptionCompat.Builder()
-                .setMediaId(object.get("uri").getAsString())
-                .setTitle(object.get("name").getAsString());
+                .setMediaId(object.get("uri").getAsString());
 
         if (object.has("name")) {
             builder.setTitle(object.get("name").getAsString());
@@ -384,6 +378,8 @@ public class MopidyService extends MediaBrowserServiceCompat {
                         int flags = 0;
                         String type = ref.get("type").getAsString();
                         switch (type) {
+                            case "album":
+                            case "artist":
                             case "directory":
                                 flags |= MediaItem.FLAG_BROWSABLE;
                                 break;
@@ -492,7 +488,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
             client.request("core.playback.stop");
 
-            playbackState = PlaybackState.STATE_STOPPED;
+            playbackState = PlaybackState.STATE_PAUSED;
             sendPlaybackState();
         }
 
@@ -515,10 +511,67 @@ public class MopidyService extends MediaBrowserServiceCompat {
             Log.i(TAG, "onCustomAction: " + action);
         }
 
+        class SearchRequest {
+            @SerializedName("any")
+            String[] parts;
+
+            public SearchRequest(String[] parts) {
+                this.parts = parts;
+            }
+        }
+
         @Override
         public void onPlayFromSearch(final String query, final Bundle extras) {
             Log.i(TAG, "onPlayFromSearch: " + query);
+            String[] parts = query.split(" ");
+
+            ArrayList<String> uris = new ArrayList<>();
+            client.request("core.library.search", new SearchRequest(parts), response -> {
+                JsonArray results = response.getAsJsonArray();
+                ArrayList<MediaSessionCompat.QueueItem> queue = new ArrayList<>();
+                for (JsonElement element : results) {
+                    JsonObject searchResult = element.getAsJsonObject();
+                    JsonArray tracks = searchResult.get("tracks").getAsJsonArray();
+                    for (JsonElement element2 : tracks) {
+                        JsonObject result = element2.getAsJsonObject();
+                        switch (result.get("__model__").getAsString()) {
+                            case "Track":
+                                uris.add(result.get("uri").getAsString());
+                                MediaDescriptionCompat desc = buildMediaDescription(result);
+                                MediaSessionCompat.QueueItem queueItem = new MediaSessionCompat.QueueItem(desc, tlid++);
+                                queue.add(queueItem);
+                                break;
+                        }
+                    }
+                }
+
+                if (queue.size() == 0) {
+                    return;
+                }
+
+                String[] array = new String[uris.size()];
+                uris.toArray(array);
+
+                client.request("core.tracklist.clear", clearResponse -> {
+                    BatchAddToTracklist addRequest = new BatchAddToTracklist(array);
+                    client.request("core.tracklist.add", addRequest, addResponse -> {
+                        mSession.setQueue(queue);
+                        mSession.setQueueTitle("Search Results");
+                        client.request("core.playback.play", new TrackListId(queue.get(0).getQueueId()));
+                    });
+                });
+            });
         }
+
+        class BatchAddToTracklist {
+            @SerializedName("uris")
+            String[] uris;
+
+            BatchAddToTracklist(String[] uris) {
+                this.uris = uris;
+            }
+        }
+
 
         @Override
         public void onAddQueueItem(MediaDescriptionCompat description) {

@@ -17,7 +17,7 @@ import java.util.ArrayList;
 
 public class ConnectActivity extends Activity {
     static final String TAG = "ConnectActivity";
-    static final String SERVICE_TYPE = "_http._tcp";
+    static final String SERVICE_TYPE = "_mopidy-http._tcp";
 
     EditText url;
     MopidyClient client;
@@ -25,7 +25,6 @@ public class ConnectActivity extends Activity {
 
     NsdManager nsdManager;
     NsdManager.DiscoveryListener discoveryListener;
-    NsdManager.ResolveListener resolveListener;
     WifiManager wifi;
     WifiManager.MulticastLock lock;
 
@@ -84,7 +83,7 @@ public class ConnectActivity extends Activity {
             }
         };
 
-        resolveListener = createResolveListener();
+
         discoveryListener = createDiscoveryListener();
 
         super.onCreate(savedInstanceState);
@@ -141,6 +140,7 @@ public class ConnectActivity extends Activity {
             @Override
             public void onServiceFound(NsdServiceInfo nsdServiceInfo) {
                 Log.i(TAG, "Found a service, resolving");
+                NsdManager.ResolveListener resolveListener = createResolveListener();
                 nsdManager.resolveService(nsdServiceInfo, resolveListener);
             }
 
