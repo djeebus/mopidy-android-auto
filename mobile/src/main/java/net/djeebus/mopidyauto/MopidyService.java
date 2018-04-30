@@ -24,7 +24,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
-import net.djeebus.mopidyauto.client.MopidyClient;
+import net.djeebus.mopidyauto.client.MopidyBluetoothClient;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,8 +34,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static android.support.v4.media.session.PlaybackStateCompat.*;
-import static net.djeebus.mopidyauto.ConnectActivity.PREFS_CONFIG;
-import static net.djeebus.mopidyauto.ConnectActivity.PREFS_CONFIG_HOST;
+import static net.djeebus.mopidyauto.FindBluetoothActivity.PREFS_CONFIG;
+import static net.djeebus.mopidyauto.FindBluetoothActivity.BT_ADDR;
 
 public class MopidyService extends MediaBrowserServiceCompat {
     private static final String TAG = "MopidyService";
@@ -45,7 +45,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
     private final Handler handler = new Handler();
 
-    private MopidyClient client;
+    private MopidyBluetoothClient client;
     private String host;
 
     int playbackState = PlaybackState.STATE_PAUSED;
@@ -97,13 +97,13 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
         SharedPreferences preferences = this.getSharedPreferences(
                 PREFS_CONFIG, MODE_PRIVATE);
-        host = preferences.getString(PREFS_CONFIG_HOST, "");
+        host = preferences.getString(BT_ADDR, "");
         if (TextUtils.isEmpty(host)) {
             Log.i(TAG, "A host has not been configured yet, bailing");
             return;
         }
 
-        client = new MopidyClient() {
+        client = new MopidyBluetoothClient() {
 
             @Override
             protected void onClosed() {
@@ -296,7 +296,9 @@ public class MopidyService extends MediaBrowserServiceCompat {
     @Override
     public void onDestroy() {
         Log.i(TAG, "onDestroy");
-        this.client.close();
+        if (this.client != null) {
+            this.client.close();
+        }
 
         mSession.release();
     }

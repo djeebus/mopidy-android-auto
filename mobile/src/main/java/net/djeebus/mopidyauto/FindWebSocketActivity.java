@@ -11,16 +11,16 @@ import android.support.annotation.Nullable;
 import android.util.Log;
 import android.view.View;
 import android.widget.*;
-import net.djeebus.mopidyauto.client.MopidyClient;
+import net.djeebus.mopidyauto.client.MopidyWebSocketClient;
 
 import java.util.ArrayList;
 
-public class ConnectActivity extends Activity {
-    static final String TAG = "ConnectActivity";
+public class FindWebSocketActivity extends Activity {
+    static final String TAG = "FindWebSocketActivity";
     static final String SERVICE_TYPE = "_mopidy-http._tcp";
 
     EditText url;
-    MopidyClient client;
+    MopidyWebSocketClient client;
     ListView deviceContainer;
 
     NsdManager nsdManager;
@@ -76,7 +76,7 @@ public class ConnectActivity extends Activity {
             return;
         }
 
-        client = new MopidyClient() {
+        client = new MopidyWebSocketClient() {
             @Override
             protected void onClosed() {
                 Log.i(TAG, "Failed to connect");
