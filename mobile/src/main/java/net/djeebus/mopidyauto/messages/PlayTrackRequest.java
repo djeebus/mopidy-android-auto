@@ -2,11 +2,11 @@ package net.djeebus.mopidyauto.messages;
 
 import com.google.gson.annotations.SerializedName;
 
-public class PlayTrack {
+public class PlayTrackRequest {
     @SerializedName("tlid")
     private Integer tlid;
 
-    public PlayTrack(Integer tlid) {
+    public PlayTrackRequest(Integer tlid) {
         this.tlid = tlid;
     }
 }

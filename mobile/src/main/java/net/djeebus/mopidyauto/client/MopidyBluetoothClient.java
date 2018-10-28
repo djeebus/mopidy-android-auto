@@ -3,6 +3,7 @@ package net.djeebus.mopidyauto.client;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
+import android.graphics.Bitmap;
 import android.util.Log;
 
 import java.io.IOException;
@@ -22,14 +23,25 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     private Charset utf8 = Charset.forName("UTF-8");
     private final android.os.Handler handler = new android.os.Handler();
 
+    private final static int SIZE_LENGTH = 4;
+
+    private final static char[] hexArray = "0123456789ABCDEF".toCharArray();
+    public static String bytesToHex(byte[] bytes) {
+        char[] hexChars = new char[bytes.length * 2];
+        for ( int j = 0; j < bytes.length; j++ ) {
+            int v = bytes[j] & 0xFF;
+            hexChars[j * 2] = hexArray[v >>> 4];
+            hexChars[j * 2 + 1] = hexArray[v & 0x0F];
+        }
+        return new String(hexChars);
+    }
+
     private class EventReader implements Runnable {
         InputStream inputStream;
 
         private EventReader(InputStream inputStream) {
             this.inputStream = inputStream;
         }
-
-        final static int SIZE_LENGTH = 4;
 
         int getUInt32(byte[] bytes) {
             byte a = bytes[0],
@@ -50,13 +62,20 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
                 byte[] lengthBytes = new byte[SIZE_LENGTH];
 
                 while (MopidyBluetoothClient.this.isConnected()) {
-                    Log.d(TAG, "Reading bytes for length");
+                    if (inputStream.available() <= 0) {
+                        Log.v(TAG, "Waiting for data ... ");
+                        break;
+                    }
+
+                    Log.d(TAG, "Reading 4 bytes for length");
                     int i = inputStream.read(lengthBytes, 0, SIZE_LENGTH);
                     if (i != SIZE_LENGTH) {
                         Log.e(TAG, "Failed to read 4 bytes");
                         return;
                     }
+
                     int length = getUInt32(lengthBytes);
+                    Log.i(TAG, "Packet size will be " + length + " bytes");
 
                     // some of these messages require multiple reads
                     byte[] messageBytes = new byte[length];
@@ -67,16 +86,19 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
                         if (messageRead <= 0) {
                             throw new IOException("Failed to read bytes");
                         }
+                        Log.d(TAG, "Read " + messageRead + " bytes");
                         position += messageRead;
                     } while (position < length);
 
                     String message = new String(messageBytes, 0, length, "UTF-8");
-
                     Log.d(TAG, "Handling message: " + message);
+
                     MopidyBluetoothClient.this.handleMessage(message);
                 }
             } catch (IOException e) {
                 Log.e(TAG, "Error in read loop", e);
+                MopidyBluetoothClient.this.close();
+                return;
             }
 
             handler.postDelayed(this, 1000);
@@ -113,7 +135,7 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
         this.onClosed();
     }
 
-    public void open(String host) {
+    public void open(String host) throws IOException {
         BluetoothDevice device = this.bluetoothAdapter.getRemoteDevice(host);
         if (device == null) {
             Log.w(TAG, "Failed to find device");
@@ -121,59 +143,64 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
         }
 
         try {
-            socket = device.createRfcommSocketToServiceRecord(MOPIDY_RPC_UUID);
-        } catch (IOException e) {
-            Log.w(TAG, "Failed to create socket", e);
-            return;
-        }
+            Log.i(TAG, "Creating socket");
+            this.socket = device.createRfcommSocketToServiceRecord(MOPIDY_RPC_UUID);
 
-        try {
-            socket.connect();
-        } catch (IOException e) {
-            Log.w(TAG, "Failed connect to device", e);
-            return;
-        }
+            Log.i(TAG, "Connecting socket");
+            this.socket.connect();
 
-        try {
-            outputStream = socket.getOutputStream();
-        } catch (IOException e) {
-            Log.w(TAG, "Failed to get the output stream");
-        }
+            Log.i(TAG, "Getting output stream");
+            this.outputStream = this.socket.getOutputStream();
 
-        InputStream inputStream;
-        try {
-            inputStream = socket.getInputStream();
-        } catch (IOException e) {
-            Log.w(TAG, "Failed to get the input stream");
-            inputStream = null;
-        }
-
-        if (inputStream != null) {
+            Log.i(TAG, "Getting input stream");
+            InputStream inputStream = this.socket.getInputStream();
             this.handler.post(new EventReader(inputStream));
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to connect");
+            this.close();
+            throw e;
         }
     }
 
     @Override
     void send(String request) {
-        if (outputStream == null) {
+        if (!this.isConnected()) {
             Log.w(TAG, "client is not connected, returning");
             return;
         }
 
-        ByteBuffer buffer = utf8.encode(request);
-        byte[] messageData = buffer.array();
-        int messageSize = buffer.limit();
-        byte[] messageSizeData = ByteBuffer.allocate(4).putInt(messageSize).array();
+        byte[] requestBytes = request.getBytes(utf8);
+        int requestLength = requestBytes.length;
+        ByteBuffer sizeBuffer = ByteBuffer.allocate(SIZE_LENGTH).putInt(requestLength);
 
+        ByteBuffer message = ByteBuffer.allocate(SIZE_LENGTH + requestLength)
+                .put(sizeBuffer.array())
+                .put(requestBytes);
+
+        byte[] messageData = message.array();
+        Log.v(TAG, "Sending message: " + request);
         try {
-            outputStream.write(messageSizeData, 0, messageSizeData.length);
-            outputStream.write(messageData, 0, messageSize);
+            Log.i(TAG, "Writing " + message.capacity() + " bytes");
+            outputStream.write(messageData, 0, messageData.length);
             outputStream.flush();
+            Log.i(TAG, "Sent " + message.capacity() + " bytes");
         } catch (IOException e) {
             Log.e(TAG, "Failed to write data: " + request, e);
+            this.close();
         }
     }
 
     @Override
-    public boolean isConnected() { return this.socket != null; }
+    public boolean isConnected() {
+        if (this.socket == null) {
+            return false;
+        }
+
+        return this.socket.isConnected();
+    }
+
+    @Override
+    public Bitmap getBitmapFromURL(String uri) {
+        return null;
+    }
 }

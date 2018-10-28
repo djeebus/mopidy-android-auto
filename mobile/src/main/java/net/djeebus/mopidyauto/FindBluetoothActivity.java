@@ -11,6 +11,7 @@ import android.view.View;
 import android.widget.*;
 import net.djeebus.mopidyauto.client.MopidyBluetoothClient;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -109,7 +110,13 @@ public class FindBluetoothActivity extends Activity {
 
     void saveMopidyUrl() {
         String host = this.url.getText().toString();
-        client.open(host);
+
+        try {
+            client.open(host);
+        }
+        catch (IOException e) {
+            Log.w(TAG, "Failed to connect");
+        }
 
         client.request("core.get_version", response -> {
             saveHost(host);

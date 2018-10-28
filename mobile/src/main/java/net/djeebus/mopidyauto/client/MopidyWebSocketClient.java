@@ -1,10 +1,17 @@
 package net.djeebus.mopidyauto.client;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.support.annotation.Nullable;
 import android.util.Log;
 import okhttp3.*;
 import okio.ByteString;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public abstract class MopidyWebSocketClient extends MopidyClient {
     private final String TAG = "MopidyWebSocketClient";
@@ -103,5 +110,21 @@ public abstract class MopidyWebSocketClient extends MopidyClient {
     @Override
     void send(String request) {
         this.webSocket.send(request);
+    }
+
+    @Override
+    public Bitmap getBitmapFromURL(String uri) {
+        Log.i(TAG, "Downloading album art: " + uri);
+        try {
+            HttpURLConnection connection = (HttpURLConnection) new URL(uri).openConnection();
+            connection.setDoInput(true);
+            connection.connect();
+            InputStream input = connection.getInputStream();
+            return BitmapFactory.decodeStream(input);
+        } catch (IOException e) {
+            // Log exception
+            Log.e(TAG, "Failed to download album art", e);
+            return null;
+        }
     }
 }

@@ -2,11 +2,11 @@ package net.djeebus.mopidyauto.messages;
 
 import com.google.gson.annotations.SerializedName;
 
-public class LibraryBrowse {
+public class GetImageDataRequest {
     @SerializedName("uri")
-    private String uri;
+    String uri;
 
-    public LibraryBrowse(String uri) {
+    public GetImageDataRequest(String uri) {
         this.uri = uri;
     }
 }

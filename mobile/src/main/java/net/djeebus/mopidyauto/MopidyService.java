@@ -3,7 +3,6 @@ package net.djeebus.mopidyauto;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.media.MediaMetadata;
 import android.media.session.PlaybackState;
 import android.net.Uri;
@@ -24,12 +23,10 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import net.djeebus.mopidyauto.client.MopidyBluetoothClient;
+import net.djeebus.mopidyauto.client.MopidyRequest;
 import net.djeebus.mopidyauto.messages.*;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -55,18 +52,22 @@ public class MopidyService extends MediaBrowserServiceCompat {
     PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
             .setActions(
                     PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID |
-                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
-                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                    PlaybackStateCompat.ACTION_PLAY_PAUSE |
-                    PlaybackStateCompat.ACTION_SET_REPEAT_MODE |
-                    PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE);
+                            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
+                            PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
+                            PlaybackStateCompat.ACTION_PLAY_PAUSE |
+                            PlaybackStateCompat.ACTION_SET_REPEAT_MODE |
+                            PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE);
 
     int translateState(String state) {
         switch (state) {
-            case "playing": return PlaybackStateCompat.STATE_PLAYING;
-            case "paused": return PlaybackStateCompat.STATE_PAUSED;
-            case "stopped": return PlaybackStateCompat.STATE_PAUSED;
-            default: return PlaybackStateCompat.STATE_NONE;
+            case "playing":
+                return PlaybackStateCompat.STATE_PLAYING;
+            case "paused":
+                return PlaybackStateCompat.STATE_PAUSED;
+            case "stopped":
+                return PlaybackStateCompat.STATE_PAUSED;
+            default:
+                return PlaybackStateCompat.STATE_NONE;
         }
     }
 
@@ -83,6 +84,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
         void updateState() {
             client.request("core.playback.get_time_position", response -> {
                 position = response.getAsLong();
+                setPosition(position);
 
                 stateBuilder.setState(playbackState, position, PLAYBACK_SPEED);
                 mSession.setPlaybackState(stateBuilder.build());
@@ -107,45 +109,72 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
             @Override
             protected void onClosed() {
-                Log.i(TAG, "Mopidy client closed, reopening");
-                this.open(host);
+                Log.i(TAG, "Mopidy client closed");
             }
         };
         client.setEventListener(this::onEvent);
-        client.open(host);
+
+
+        try {
+            client.open(host);
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to connect to mopidy");
+            return;
+        }
 
         mSession = new MediaSessionCompat(this, "MopidyService");
         setSessionToken(mSession.getSessionToken());
         mSession.setCallback(new MediaSessionCallback());
         mSession.setFlags(
                 MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
-                MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS |
-                MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
+                        MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS |
+                        MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
 
         handler.postDelayed(updateState, 1000);
 
-        refreshOptions();
-
-        refreshCurrentTrack();
-
-        refreshTracklist();
+        synchronizeInterface();
     }
 
-    void refreshTracklist() {
-        client.request("core.tracklist.get_tl_tracks", response -> {
-            JsonArray tracks = response.getAsJsonArray();
-            ArrayList<MediaSessionCompat.QueueItem> queue = new ArrayList<>();
-            for (JsonElement element : tracks) {
-                JsonObject playlistInfo = element.getAsJsonObject();
-                Long tlid = playlistInfo.get("tlid").getAsLong();
-                JsonObject track = playlistInfo.get("track").getAsJsonObject();
-                MediaDescriptionCompat desc = buildMediaDescription(track);
-                MediaSessionCompat.QueueItem queueItem = new MediaSessionCompat.QueueItem(desc, tlid);
-                queue.add(queueItem);
-            }
-            mSession.setQueue(queue);
-            mSession.setQueueTitle("Queue");
-        });
+    void synchronizeInterface() {
+        this.client.request(
+                new MopidyRequest("core.tracklist.get_random", response -> {
+                    boolean result = response.getAsBoolean();
+                    mSession.setShuffleMode(result ? SHUFFLE_MODE_ALL : SHUFFLE_MODE_NONE);
+                }),
+                new MopidyRequest("core.tracklist.get_repeat", response -> {
+                    boolean result = response.getAsBoolean();
+                    mSession.setRepeatMode(result ? REPEAT_MODE_ALL : REPEAT_MODE_NONE);
+                }),
+                new MopidyRequest("core.playback.get_current_tl_track", this::processGetCurrentTrackListResponse),
+                new MopidyRequest("core.tracklist.get_tl_tracks", this::processRefreshTrackListResponse)
+        );
+    }
+
+    void processRefreshTrackListResponse(JsonElement response) {
+        JsonArray tracks = response.getAsJsonArray();
+        ArrayList<MediaSessionCompat.QueueItem> queue = new ArrayList<>();
+        for (JsonElement element : tracks) {
+            JsonObject playlistInfo = element.getAsJsonObject();
+            Long tlid = playlistInfo.get("tlid").getAsLong();
+            JsonObject track = playlistInfo.get("track").getAsJsonObject();
+            MediaDescriptionCompat desc = buildMediaDescription(track);
+            MediaSessionCompat.QueueItem queueItem = new MediaSessionCompat.QueueItem(desc, tlid);
+            queue.add(queueItem);
+        }
+        mSession.setQueue(queue);
+        mSession.setQueueTitle("Queue");
+    }
+
+    private void setPosition(long position) {
+        this.position = position;
+
+        this.sendPlaybackState();
+    }
+
+    private void setPlaybackState(Integer playbackState) {
+        this.playbackState = playbackState;
+
+        this.sendPlaybackState();
     }
 
     private void sendPlaybackState() {
@@ -156,130 +185,125 @@ public class MopidyService extends MediaBrowserServiceCompat {
     private void onEvent(String event, JsonObject jsonObject) {
         switch (event) {
             case "seeked":
-                this.position = jsonObject.get("time_position").getAsLong();
+                setPosition(jsonObject.get("time_position").getAsLong());
                 sendPlaybackState();
                 break;
 
             case "volume_changed":
-                /* int volume = */ jsonObject.get("volume").getAsInt();
+                /* int volume = */
+                jsonObject.get("volume").getAsInt();
                 break;
 
             case "tracklist_changed":
-                refreshCurrentTrack();
-                refreshTracklist();
+                this.client.request(
+                        new MopidyRequest("core.playback.get_current_tl_track", this::processGetCurrentTrackListResponse),
+                        new MopidyRequest("core.tracklist.get_tl_tracks", this::processRefreshTrackListResponse)
+                );
                 break;
 
             case "playback_state_changed":
                 String newState = jsonObject.get("new_state").getAsString();
-                this.playbackState = translateState(newState);
-                sendPlaybackState();
+                setPlaybackState(translateState(newState));
 
-                refreshCurrentTrack();
+                client.request(
+                        "core.playback.get_current_tl_track", this::processGetCurrentTrackListResponse
+                );
                 break;
 
             case "options_changed":
-                refreshOptions();
+                this.client.request(
+                        new MopidyRequest("core.tracklist.get_random", response -> {
+                            boolean result = response.getAsBoolean();
+                            mSession.setShuffleMode(result ? SHUFFLE_MODE_ALL : SHUFFLE_MODE_NONE);
+                        }),
+                        new MopidyRequest("core.tracklist.get_repeat", response -> {
+                            boolean result = response.getAsBoolean();
+                            mSession.setRepeatMode(result ? REPEAT_MODE_ALL : REPEAT_MODE_NONE);
+                        })
+                );
                 break;
         }
     }
 
-    void refreshCurrentTrack() {
-        client.request("core.playback.get_current_tl_track", response -> {
-            if (response.isJsonNull()) {
-                mSession.setMetadata(null);
-                return;
-            }
+    void processGetCurrentTrackListResponse(JsonElement response) {
+        if (response.isJsonNull()) {
+            mSession.setMetadata(null);
+            return;
+        }
 
-            JsonObject track = response.getAsJsonObject().get("track").getAsJsonObject();
-            String trackId = track.get("uri").getAsString();
+        JsonObject track = response.getAsJsonObject().get("track").getAsJsonObject();
+        String trackId = track.get("uri").getAsString();
 
-            MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder()
-                    .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, trackId);
+        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder()
+                .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, trackId);
 
+        if (track.has("name")) {
             String trackName = track.get("name").getAsString();
             builder.putString(MediaMetadata.METADATA_KEY_TITLE, trackName);
-
-            if (track.has("artists")) {
-                JsonArray artists = track.get("artists").getAsJsonArray();
-                String artistName;
-                if (artists.size() == 0) {
-                    artistName = "Unknown Artist";
-                } else {
-                    JsonObject artist = artists.get(0).getAsJsonObject();
-                    artistName = artist.get("name").getAsString();
-                }
-                builder.putString(MediaMetadata.METADATA_KEY_ARTIST, artistName);
-            }
-
-            if (track.has("album")) {
-                JsonObject album = track.get("album").getAsJsonObject();
-
-                if (track.has("name")) {
-                    String albumName = album.get("name").getAsString();
-                    builder.putString(MediaMetadata.METADATA_KEY_ALBUM, albumName);
-                }
-
-                if (album.has("num_tracks")) {
-                    Long trackTotal = album.get("num_tracks").getAsLong();
-                    builder.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, trackTotal);
-                }
-
-                if (album.has("date")) {
-                    Long year = Long.parseLong(album.get("date").getAsString().substring(0, 3));
-                    builder.putLong(MediaMetadata.METADATA_KEY_YEAR, year);
-                }
-            }
-
-            if (track.has("track_no")) {
-                Long trackNumber = track.get("track_no").getAsLong();
-                builder.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, trackNumber);
-            }
-
-            if (track.has("length")) {
-                Long duration = track.get("length").getAsLong();
-                builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
-            }
-
-            client.request("core.library.get_images", new GetImagesRequest(new String[] {trackId}), imagesResponse -> {
-                JsonArray images = imagesResponse.getAsJsonObject().get(trackId).getAsJsonArray();
-                for (JsonElement imageInfo : images) {
-
-                    String imageUrl = host + imageInfo.getAsJsonObject().get("uri").getAsString();
-                    Bitmap albumArt = getBitmapFromURL(imageUrl);
-                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, albumArt);
-                    break;
-                }
-
-                mSession.setMetadata(builder.build());
-            });
-        });
-    }
-
-    public Bitmap getBitmapFromURL(String uri) {
-        Log.i(TAG, "Downloading album art: " + uri);
-        try {
-            HttpURLConnection connection = (HttpURLConnection) new URL(uri).openConnection();
-            connection.setDoInput(true);
-            connection.connect();
-            InputStream input = connection.getInputStream();
-            return BitmapFactory.decodeStream(input);
-        } catch (IOException e) {
-            // Log exception
-            Log.e(TAG, "Failed to download album art", e);
-            return null;
         }
-    }
 
-    void refreshOptions() {
-        client.request("core.tracklist.get_random", response -> {
-            boolean result = response.getAsBoolean();
-            mSession.setShuffleMode(result ? SHUFFLE_MODE_ALL : SHUFFLE_MODE_NONE);
-        });
+        if (track.has("artists")) {
+            JsonArray artists = track.get("artists").getAsJsonArray();
+            String artistName;
+            if (artists.size() == 0) {
+                artistName = "Unknown Artist";
+            } else {
+                JsonObject artist = artists.get(0).getAsJsonObject();
+                artistName = artist.get("name").getAsString();
+            }
+            builder.putString(MediaMetadata.METADATA_KEY_ARTIST, artistName);
+        }
 
-        client.request("core.tracklist.get_repeat", response -> {
-            boolean result = response.getAsBoolean();
-            mSession.setRepeatMode(result ? REPEAT_MODE_ALL : REPEAT_MODE_NONE);
-        });
+        if (track.has("album")) {
+            JsonObject album = track.get("album").getAsJsonObject();
+
+            if (track.has("name")) {
+                String albumName = album.get("name").getAsString();
+                builder.putString(MediaMetadata.METADATA_KEY_ALBUM, albumName);
+            }
+
+            if (album.has("num_tracks")) {
+                Long trackTotal = album.get("num_tracks").getAsLong();
+                builder.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, trackTotal);
+            }
+
+            if (album.has("date")) {
+                Long year = Long.parseLong(album.get("date").getAsString().substring(0, 3));
+                builder.putLong(MediaMetadata.METADATA_KEY_YEAR, year);
+            }
+        }
+
+        if (track.has("track_no")) {
+            Long trackNumber = track.get("track_no").getAsLong();
+            builder.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, trackNumber);
+        }
+
+        if (track.has("length")) {
+            Long duration = track.get("length").getAsLong();
+            builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
+        }
+
+        client.request(
+                new MopidyRequest(
+                        "core.library.get_images",
+                        new GetImagesRequest(new String[]{trackId}),
+                        response1 -> {
+                            JsonArray images = response1.getAsJsonObject().get(trackId).getAsJsonArray();
+                            for (JsonElement imageInfo : images) {
+
+                                String imageUrl = host + imageInfo.getAsJsonObject().get("uri").getAsString();
+                                Bitmap albumArt = client.getBitmapFromURL(imageUrl);
+                                if (albumArt == null) {
+                                    continue;
+                                }
+
+                                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, albumArt);
+                                break;
+                            }
+
+                            mSession.setMetadata(builder.build());
+                        })
+        );
     }
 
     @Override
@@ -318,8 +342,10 @@ public class MopidyService extends MediaBrowserServiceCompat {
             JsonArray artists = object.get("artists").getAsJsonArray();
             for (JsonElement artistItem : artists) {
                 JsonObject artist = artistItem.getAsJsonObject();
-                builder.setSubtitle(artist.get("name").getAsString());
-                break;
+                if (artist.has("name")) {
+                    builder.setSubtitle(artist.get("name").getAsString());
+                    break;
+                }
             }
         }
 
@@ -335,42 +361,44 @@ public class MopidyService extends MediaBrowserServiceCompat {
         result.detach();
 
         this.client.request(
-                "core.library.browse",
-                new LibraryBrowse("root".equals(parentMediaId) ? null : parentMediaId),
-                response -> {
-                    List<MediaItem> items = new ArrayList<>();
+                new MopidyRequest(
+                        "core.library.browse",
+                        new LibraryBrowseRequest("root".equals(parentMediaId) ? null : parentMediaId),
+                        response -> {
+                            List<MediaItem> items = new ArrayList<>();
 
-                    JsonArray array = response.getAsJsonArray();
-                    for (JsonElement item : array) {
-                        JsonObject ref = item.getAsJsonObject();
-                        MediaDescriptionCompat desc = new MediaDescriptionCompat.Builder()
-                                .setTitle(ref.get("name").getAsString())
-                                .setMediaId(ref.get("uri").getAsString())
-                                .build();
+                            JsonArray array = response.getAsJsonArray();
+                            for (JsonElement item : array) {
+                                JsonObject ref = item.getAsJsonObject();
+                                MediaDescriptionCompat desc = new MediaDescriptionCompat.Builder()
+                                        .setTitle(ref.get("name").getAsString())
+                                        .setMediaId(ref.get("uri").getAsString())
+                                        .build();
 
-                        int flags = 0;
-                        String type = ref.get("type").getAsString();
-                        switch (type) {
-                            case "album":
-                            case "artist":
-                            case "directory":
-                                flags |= MediaItem.FLAG_BROWSABLE;
-                                break;
+                                int flags = 0;
+                                String type = ref.get("type").getAsString();
+                                switch (type) {
+                                    case "album":
+                                    case "artist":
+                                    case "directory":
+                                        flags |= MediaItem.FLAG_BROWSABLE;
+                                        break;
 
-                            case "track":
-                                flags |= MediaItem.FLAG_PLAYABLE;
-                                break;
+                                    case "track":
+                                        flags |= MediaItem.FLAG_PLAYABLE;
+                                        break;
 
-                            default:
-                                continue;
-                        }
+                                    default:
+                                        continue;
+                                }
 
-                        MediaItem mediaItem = new MediaItem(desc, flags);
-                        items.add(mediaItem);
-                    }
+                                MediaItem mediaItem = new MediaItem(desc, flags);
+                                items.add(mediaItem);
+                            }
 
-                    result.sendResult(items);
-                });
+                            result.sendResult(items);
+                        })
+        );
     }
 
     private final class MediaSessionCallback extends MediaSessionCompat.Callback {
@@ -378,66 +406,55 @@ public class MopidyService extends MediaBrowserServiceCompat {
         public void onPlay() {
             Log.i(TAG, "onPlay");
 
-            client.request("core.playback.play");
+            client.request("core.playback.play", response -> setPlaybackState(PlaybackState.STATE_PLAYING));
         }
 
         @Override
         public void onSkipToQueueItem(long queueId) {
             Log.i(TAG, "onSkipToQueueItem: " + queueId);
-            client.request("core.playback.play", new TrackListId(queueId));
+            client.request("core.playback.play", new TrackListId(queueId), response -> setPlaybackState(PlaybackState.STATE_PLAYING));
         }
 
         @Override
         public void onSeekTo(long position) {
             Log.i(TAG, "onSeekTo: " + position);
 
-            client.request("core.playback.seek", new Seek(position));
+            client.request("core.playback.seek", new SeekRequest(position), response -> setPosition(position));
         }
 
         @Override
         public void onPlayFromMediaId(String mediaId, Bundle extras) {
             Log.i(TAG, "onPlayFromMediaId: " + mediaId);
 
-            client.request("core.tracklist.add", new AddToTracklist(mediaId), response -> {
-                JsonArray tracks = response.getAsJsonArray();
-                JsonElement track = tracks.get(0);
+            client.request(new MopidyRequest("core.tracklist.add", new AddToTracklist(mediaId), response1 -> {
+                    JsonArray tracks = response1.getAsJsonArray();
+                    JsonElement track = tracks.get(0);
 
-                PlayTrack request = new PlayTrack(
-                        track.getAsJsonObject().get("tlid").getAsInt());
-
-                client.request("core.playback.play", request);
-            });
+                    client.request(
+                            "core.playback.play",
+                            new PlayTrackRequest(track.getAsJsonObject().get("tlid").getAsInt()),
+                            response2 -> setPlaybackState(PlaybackState.STATE_PLAYING)
+                    );
+            }));
         }
 
         @Override
         public void onPause() {
             Log.i(TAG, "onPause");
 
-            client.request("core.playback.pause");
-
-            if (playbackState == PlaybackState.STATE_PLAYING) {
-                playbackState = PlaybackState.STATE_PAUSED;
-            } else {
-                playbackState = PlaybackState.STATE_PLAYING;
-            }
-
-            sendPlaybackState();
+            client.request("core.playback.pause", response -> setPlaybackState(PlaybackState.STATE_PAUSED));
         }
 
         @Override
         public void onStop() {
             Log.i(TAG, "onStop");
 
-            client.request("core.playback.stop");
-
-            playbackState = PlaybackState.STATE_PAUSED;
-            sendPlaybackState();
+            client.request("core.playback.stop", response -> setPlaybackState(PlaybackState.STATE_STOPPED));
         }
 
         @Override
         public void onSkipToNext() {
             Log.i(TAG, "onSkipToNext");
-
             client.request("core.playback.next");
         }
 

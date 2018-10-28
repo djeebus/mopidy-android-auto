@@ -1,16 +1,15 @@
 package net.djeebus.mopidyauto.client;
 
+import android.graphics.Bitmap;
 import android.util.Log;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
+import android.util.SparseArray;
+import com.google.gson.*;
 
-import java.util.HashMap;
+import java.io.IOException;
 
 public abstract class MopidyClient {
     private final String TAG = "MopidyClient";
-    private final HashMap<Integer, MopidyCallback> callbacks = new HashMap<>();
+    private final SparseArray<MopidyCallback> callbacks = new SparseArray<>();
     private MopidyWebSocketClient.EventListener eventListener;
 
     public interface EventListener {
@@ -21,33 +20,32 @@ public abstract class MopidyClient {
         this.eventListener = eventListener;
     }
 
-
     public void request(String method) {
         this.request(method, null);
     }
 
-    public void request(String method, MopidyCallback callback) {
-        this.request(new MopidyRequest(method), callback);
-    }
-
     public void request(String method, Object params) {
-        this.request(new MopidyRequest(method, params), null);
+        this.request(method, params, null);
     }
 
+    public void request(String method, MopidyCallback callback) {
+        this.request(method, null, callback);
+    }
     public void request(String method, Object params, MopidyCallback callback) {
-        this.request(new MopidyRequest(method, params), callback);
+        this.request(new MopidyRequest(method, params, callback));
     }
 
-    private void request(MopidyRequest request, MopidyCallback callback) {
+    public void request(MopidyRequest... requests) {
         GsonBuilder gsonBuilder = new GsonBuilder();
         gsonBuilder.serializeNulls();
         Gson gson = gsonBuilder.create();
 
-        Log.i(TAG, "serializing");
-        String data = gson.toJson(request);
+        String data = gson.toJson(requests);
 
-        if (callback != null) {
-            this.callbacks.put(request.getRequestId(), callback);
+        for (MopidyRequest request : requests){
+            if (request.callback != null) {
+                this.callbacks.put(request.getRequestId(), request.callback);
+            }
         }
 
         Log.i(TAG, "Sending: " + data);
@@ -55,27 +53,42 @@ public abstract class MopidyClient {
     }
 
     void handleMessage(String text) {
-        Log.i(TAG, "response: " + text);
-        Gson gson = new Gson();
-        JsonObject response = gson.fromJson(text, JsonObject.class);
-        if (response.has("event")) {
-            String event = response.get("event").getAsString();
-            eventListener.onEvent(event, response);
+        if (eventListener == null) {
+            Log.w(TAG, "Handled message w/o event handler");
             return;
         }
 
-        int requestId = response.get("id").getAsInt();
-        JsonElement result = response.get("result");
+        Log.i(TAG, "response: " + text);
+        Gson gson = new Gson();
+        if (text.charAt(0) == '{') {
+            text = "[" + text + "]";
+        }
 
-        if (callbacks.containsKey(requestId)) {
-            MopidyCallback callback = callbacks.remove(requestId);
-            callback.onResponse(result);
+        JsonArray responses = gson.fromJson(text, JsonArray.class);
+        for (int index = 0; index < responses.size(); index++) {
+            JsonObject response = (JsonObject) responses.get(index);
+
+            if (response.has("event")) {
+                String event = response.get("event").getAsString();
+                eventListener.onEvent(event, response);
+                return;
+            }
+
+            int requestId = response.get("id").getAsInt();
+            JsonElement result = response.get("result");
+
+            MopidyCallback callback = callbacks.get(requestId);
+            if (callback != null) {
+                callbacks.remove(requestId);
+                callback.onResponse(result);
+            }
         }
     }
 
     public abstract boolean isConnected();
-    public abstract void open(String host);
+    public abstract void open(String host) throws IOException;
     abstract void send(String request);
     public abstract void close();
     protected abstract void onClosed();
+    public abstract Bitmap getBitmapFromURL(String uri);
 }
