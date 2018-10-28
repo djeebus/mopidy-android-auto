@@ -23,8 +23,8 @@ import android.util.Log;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.annotations.SerializedName;
 import net.djeebus.mopidyauto.client.MopidyBluetoothClient;
+import net.djeebus.mopidyauto.messages.*;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,8 +34,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static android.support.v4.media.session.PlaybackStateCompat.*;
-import static net.djeebus.mopidyauto.FindBluetoothActivity.PREFS_CONFIG;
 import static net.djeebus.mopidyauto.FindBluetoothActivity.BT_ADDR;
+import static net.djeebus.mopidyauto.FindBluetoothActivity.PREFS_CONFIG;
 
 public class MopidyService extends MediaBrowserServiceCompat {
     private static final String TAG = "MopidyService";
@@ -108,7 +108,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
             @Override
             protected void onClosed() {
                 Log.i(TAG, "Mopidy client closed, reopening");
-
                 this.open(host);
             }
         };
@@ -162,7 +161,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 break;
 
             case "volume_changed":
-                int volume = jsonObject.get("volume").getAsInt();
+                /* int volume = */ jsonObject.get("volume").getAsInt();
                 break;
 
             case "tracklist_changed":
@@ -181,15 +180,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
             case "options_changed":
                 refreshOptions();
                 break;
-        }
-    }
-
-    class GetImagesRequest {
-        @SerializedName("uris")
-        String[] uris;
-
-        GetImagesRequest(String[] uris) {
-            this.uris = uris;
         }
     }
 
@@ -272,8 +262,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
             connection.setDoInput(true);
             connection.connect();
             InputStream input = connection.getInputStream();
-            Bitmap myBitmap = BitmapFactory.decodeStream(input);
-            return myBitmap;
+            return BitmapFactory.decodeStream(input);
         } catch (IOException e) {
             // Log exception
             Log.e(TAG, "Failed to download album art", e);
@@ -301,24 +290,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
         }
 
         mSession.release();
-    }
-
-    class LibraryBrowse {
-        @SerializedName("uri")
-        private String uri;
-
-        LibraryBrowse(String uri) {
-            this.uri = uri;
-        }
-    }
-
-    class Seek {
-        @SerializedName("time_position")
-        private Long timePosition;
-
-        Seek(Long timePosition) {
-            this.timePosition = timePosition;
-        }
     }
 
     @Override
@@ -402,30 +373,12 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 });
     }
 
-    class PlayTrack {
-        @SerializedName("tlid")
-        private Integer tlid;
-
-        PlayTrack(Integer tlid) {
-            this.tlid = tlid;
-        }
-    }
-
     private final class MediaSessionCallback extends MediaSessionCompat.Callback {
         @Override
         public void onPlay() {
             Log.i(TAG, "onPlay");
 
             client.request("core.playback.play");
-        }
-
-        class TrackListId {
-            @SerializedName("tlid")
-            Long tlid;
-
-            TrackListId(Long queueId) {
-                this.tlid = queueId;
-            }
         }
 
         @Override
@@ -439,19 +392,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
             Log.i(TAG, "onSeekTo: " + position);
 
             client.request("core.playback.seek", new Seek(position));
-        }
-
-        class AddToTracklist {
-            @SerializedName("uri")
-            private String uri;
-
-            @SerializedName("at_position")
-            private Long atPosition;
-
-            AddToTracklist(String uri) {
-                this.uri = uri;
-                this.atPosition = 0L;
-            }
         }
 
         @Override
@@ -513,15 +453,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
             Log.i(TAG, "onCustomAction: " + action);
         }
 
-        class SearchRequest {
-            @SerializedName("any")
-            String[] parts;
-
-            public SearchRequest(String[] parts) {
-                this.parts = parts;
-            }
-        }
-
         @Override
         public void onPlayFromSearch(final String query, final Bundle extras) {
             Log.i(TAG, "onPlayFromSearch: " + query);
@@ -564,16 +495,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 });
             });
         }
-
-        class BatchAddToTracklist {
-            @SerializedName("uris")
-            String[] uris;
-
-            BatchAddToTracklist(String[] uris) {
-                this.uris = uris;
-            }
-        }
-
 
         @Override
         public void onAddQueueItem(MediaDescriptionCompat description) {
