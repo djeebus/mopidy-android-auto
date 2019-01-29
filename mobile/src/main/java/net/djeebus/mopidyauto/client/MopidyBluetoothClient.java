@@ -89,14 +89,17 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
 
                     // some of these messages require multiple reads
                     byte[] messageBytes = new byte[length];
+                    int PACKET_SIZE = 1024; // read 1kb at a time
                     int position = 0, messageRead;
                     do {
-                        Log.d(TAG, "Reading bytes for message");
-                        messageRead = inputStream.read(messageBytes, position, length - position);
+                        int readSize = Math.min(PACKET_SIZE, length);
+                        Log.d(TAG, "Reading " + readSize + " bytes for message");
+                        messageRead = inputStream.read(messageBytes, position, readSize);
+                        Log.d(TAG, "Read " + messageRead + " bytes");
+
                         if (messageRead <= 0) {
                             throw new IOException("Failed to read bytes");
                         }
-                        Log.d(TAG, "Read " + messageRead + " bytes");
                         position += messageRead;
                     } while (position < length);
 
