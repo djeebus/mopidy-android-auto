@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 public abstract class MopidyBluetoothClient extends MopidyClient {
@@ -20,7 +21,9 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     private final BluetoothAdapter bluetoothAdapter;
     private BluetoothSocket socket;
     private OutputStream outputStream;
+    private EventReader inputReader;
     private Charset utf8 = Charset.forName("UTF-8");
+
     private final android.os.Handler handler = new android.os.Handler();
 
     private final static int SIZE_LENGTH = 4;
@@ -37,10 +40,14 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     }
 
     private class EventReader implements Runnable {
+        private final String TAG = "EventReader";
+
         InputStream inputStream;
+        boolean stop;
 
         private EventReader(InputStream inputStream) {
             this.inputStream = inputStream;
+            this.stop = false;
         }
 
         int getUInt32(byte[] bytes) {
@@ -56,12 +63,23 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
                      (d & 0xff));
         }
 
+        void stop() {
+            this.stop = true;
+        }
+
         @Override
         public synchronized void run() {
             try {
                 byte[] lengthBytes = new byte[SIZE_LENGTH];
 
                 while (MopidyBluetoothClient.this.isConnected()) {
+                    if (this.stop) {
+                        Log.d(TAG, "Stopped reading, closing input stream");
+                        this.inputStream.close();
+                        this.inputStream = null;
+                        return;
+                    }
+
                     if (inputStream.available() <= 0) {
                         Log.v(TAG, "Waiting for data ... ");
                         break;
@@ -90,7 +108,7 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
                         position += messageRead;
                     } while (position < length);
 
-                    String message = new String(messageBytes, 0, length, "UTF-8");
+                    String message = new String(messageBytes, 0, length, StandardCharsets.UTF_8);
                     Log.d(TAG, "Handling message: " + message);
 
                     MopidyBluetoothClient.this.handleMessage(message);
@@ -116,6 +134,7 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     public void close() {
         if (outputStream != null) {
             try {
+                Log.i(TAG, "Closing output stream");
                 outputStream.close();
             } catch (IOException e) {
                 Log.w(TAG, "Failed to close stream", e);
@@ -125,11 +144,17 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
 
         if (socket != null) {
             try {
+                Log.i(TAG, "Closing socket");
                 socket.close();
             } catch (IOException e) {
                 Log.w(TAG, "Failed to close socket", e);
             }
             socket = null;
+        }
+
+        if (inputReader != null) {
+            inputReader.stop();
+            inputReader = null;
         }
 
         this.onClosed();
@@ -154,9 +179,10 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
 
             Log.i(TAG, "Getting input stream");
             InputStream inputStream = this.socket.getInputStream();
-            this.handler.post(new EventReader(inputStream));
+            this.inputReader = new EventReader(inputStream);
+            this.handler.post(this.inputReader);
         } catch (IOException e) {
-            Log.e(TAG, "Failed to connect");
+            Log.e(TAG, "Failed to connect", e);
             this.close();
             throw e;
         }

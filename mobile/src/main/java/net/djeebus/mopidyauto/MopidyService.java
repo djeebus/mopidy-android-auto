@@ -71,27 +71,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
         }
     }
 
-    private final Runnable updateState = new Runnable() {
-        @Override
-        public synchronized void run() {
-            if (client.isConnected()) {
-                updateState();
-            }
-
-            handler.postDelayed(updateState, 1000);
-        }
-
-        void updateState() {
-            client.request("core.playback.get_time_position", response -> {
-                position = response.getAsLong();
-                setPosition(position);
-
-                stateBuilder.setState(playbackState, position, PLAYBACK_SPEED);
-                mSession.setPlaybackState(stateBuilder.build());
-            });
-        }
-    };
-
     @Override
     public void onCreate() {
         Log.i(TAG, "onCreate");
@@ -114,13 +93,33 @@ public class MopidyService extends MediaBrowserServiceCompat {
         };
         client.setEventListener(this::onEvent);
 
+        final Runnable updateState = new Runnable() {
+            @Override
+            public synchronized void run() {
+                if (client.isConnected()) {
+                    updateState();
+                }
 
-        try {
-            client.open(host);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to connect to mopidy");
-            return;
-        }
+                try {
+                    client.open(host);
+                } catch (IOException e) {
+                    Log.w(TAG, "Failed to connect to " + host, e);
+                }
+
+                handler.postDelayed(this, 1000);
+            }
+
+            void updateState() {
+                client.request("core.playback.get_time_position", response -> {
+                    position = response.getAsLong();
+                    setPosition(position);
+
+                    stateBuilder.setState(playbackState, position, PLAYBACK_SPEED);
+                    mSession.setPlaybackState(stateBuilder.build());
+                });
+            }
+        };
+        updateState.run();
 
         mSession = new MediaSessionCompat(this, "MopidyService");
         setSessionToken(mSession.getSessionToken());
@@ -129,8 +128,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS |
                         MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS |
                         MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
-
-        handler.postDelayed(updateState, 1000);
 
         synchronizeInterface();
     }
@@ -309,6 +306,11 @@ public class MopidyService extends MediaBrowserServiceCompat {
     @Override
     public void onDestroy() {
         Log.i(TAG, "onDestroy");
+        if (this.updateState != null) {
+            this.updateState.stop();
+            this.updateState = null;
+        }
+
         if (this.client != null) {
             this.client.close();
         }

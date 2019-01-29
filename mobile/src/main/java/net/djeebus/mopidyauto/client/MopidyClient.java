@@ -53,11 +53,6 @@ public abstract class MopidyClient {
     }
 
     void handleMessage(String text) {
-        if (eventListener == null) {
-            Log.w(TAG, "Handled message w/o event handler");
-            return;
-        }
-
         Log.i(TAG, "response: " + text);
         Gson gson = new Gson();
         if (text.charAt(0) == '{') {
@@ -70,6 +65,11 @@ public abstract class MopidyClient {
 
             if (response.has("event")) {
                 String event = response.get("event").getAsString();
+                if (eventListener == null) {
+                    Log.w(TAG, "Handled message w/o event handler");
+                    continue;
+                }
+
                 eventListener.onEvent(event, response);
                 return;
             }
