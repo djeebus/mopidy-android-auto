@@ -16,6 +16,10 @@ public abstract class MopidyClient {
         void onEvent(String event, JsonObject message);
     }
 
+    public interface BitmapCallback {
+        void run(Bitmap bitmap);
+    }
+
     public void setEventListener(EventListener eventListener) {
         this.eventListener = eventListener;
     }
@@ -90,5 +94,5 @@ public abstract class MopidyClient {
     abstract void send(String request);
     public abstract void close();
     protected abstract void onClosed();
-    public abstract Bitmap getBitmapFromURL(String uri);
+    public abstract void getBitmapFromURL(String uri, BitmapCallback callback);
 }

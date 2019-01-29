@@ -113,18 +113,18 @@ public abstract class MopidyWebSocketClient extends MopidyClient {
     }
 
     @Override
-    public Bitmap getBitmapFromURL(String uri) {
+    public void getBitmapFromURL(String uri, BitmapCallback callback) {
         Log.i(TAG, "Downloading album art: " + uri);
         try {
             HttpURLConnection connection = (HttpURLConnection) new URL(uri).openConnection();
             connection.setDoInput(true);
             connection.connect();
             InputStream input = connection.getInputStream();
-            return BitmapFactory.decodeStream(input);
+            Bitmap bitmap = BitmapFactory.decodeStream(input);
+            callback.run(bitmap);
         } catch (IOException e) {
             // Log exception
             Log.e(TAG, "Failed to download album art", e);
-            return null;
         }
     }
 }

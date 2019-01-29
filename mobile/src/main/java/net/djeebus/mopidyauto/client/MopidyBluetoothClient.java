@@ -4,7 +4,10 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.util.Base64;
 import android.util.Log;
+import net.djeebus.mopidyauto.messages.GetImageDataRequest;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -27,17 +30,6 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     private final android.os.Handler handler = new android.os.Handler();
 
     private final static int SIZE_LENGTH = 4;
-
-    private final static char[] hexArray = "0123456789ABCDEF".toCharArray();
-    public static String bytesToHex(byte[] bytes) {
-        char[] hexChars = new char[bytes.length * 2];
-        for ( int j = 0; j < bytes.length; j++ ) {
-            int v = bytes[j] & 0xFF;
-            hexChars[j * 2] = hexArray[v >>> 4];
-            hexChars[j * 2 + 1] = hexArray[v & 0x0F];
-        }
-        return new String(hexChars);
-    }
 
     private class EventReader implements Runnable {
         private final String TAG = "EventReader";
@@ -204,12 +196,12 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
                 .put(requestBytes);
 
         byte[] messageData = message.array();
-        Log.v(TAG, "Sending message: " + request);
+        Log.d(TAG, "Sending message: " + request);
         try {
-            Log.i(TAG, "Writing " + message.capacity() + " bytes");
+            Log.v(TAG, "Writing " + message.capacity() + " bytes");
             outputStream.write(messageData, 0, messageData.length);
             outputStream.flush();
-            Log.i(TAG, "Sent " + message.capacity() + " bytes");
+            Log.v(TAG, "Sent " + message.capacity() + " bytes");
         } catch (IOException e) {
             Log.e(TAG, "Failed to write data: " + request, e);
             this.close();
@@ -226,7 +218,16 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     }
 
     @Override
-    public Bitmap getBitmapFromURL(String uri) {
-        return null;
+    public void getBitmapFromURL(String uri, BitmapCallback callback) {
+        this.request("btrpc.get_image_data", new GetImageDataRequest(uri),
+                response -> {
+                    if (response == null) {
+                        return;
+                    }
+
+                    byte[] data = Base64.decode(response.getAsString(), Base64.DEFAULT);
+                    Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                    callback.run(bitmap);
+                });
     }
 }

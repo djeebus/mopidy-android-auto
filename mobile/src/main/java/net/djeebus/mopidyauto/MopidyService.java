@@ -38,12 +38,58 @@ public class MopidyService extends MediaBrowserServiceCompat {
     private static final String TAG = "MopidyService";
     private static final float PLAYBACK_SPEED = 1.0f;
 
-    private MediaSessionCompat mSession;
+    class StateUpdater implements Runnable {
+        private String host;
+
+        @Override
+        public synchronized void run() {
+            if (this.host == null) {
+                return;
+            }
+
+            if (!client.isConnected()) {
+                this.connect();
+            } else {
+                this.updateState();
+            }
+
+            handler.postDelayed(this, 1000);
+        }
+
+        private void updateState() {
+            client.request("core.playback.get_time_position", response -> {
+                setPosition(response.getAsLong());
+                sendPlaybackState();
+            });
+        }
+
+        private void connect() {
+            try {
+                client.open(this.host);
+                synchronizeInterface();
+            } catch (IOException e) {
+                Log.w(TAG, "Failed to connect to " + this.host, e);
+            }
+        }
+
+        void start(String host) {
+            this.host = host;
+
+            this.run();
+        }
+
+        void stop() {
+            this.host = null;
+        }
+
+        String getHost() { return this.host; }
+    }
 
     private final Handler handler = new Handler();
+    private final StateUpdater updateState = new StateUpdater();
 
+    private MediaSessionCompat mSession;
     private MopidyBluetoothClient client;
-    private String host;
 
     int playbackState = PlaybackState.STATE_PAUSED;
     long position = 0;
@@ -78,7 +124,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
         SharedPreferences preferences = this.getSharedPreferences(
                 PREFS_CONFIG, MODE_PRIVATE);
-        host = preferences.getString(BT_ADDR, "");
+        String host = preferences.getString(BT_ADDR, "");
         if (TextUtils.isEmpty(host)) {
             Log.i(TAG, "A host has not been configured yet, bailing");
             return;
@@ -93,34 +139,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
         };
         client.setEventListener(this::onEvent);
 
-        final Runnable updateState = new Runnable() {
-            @Override
-            public synchronized void run() {
-                if (client.isConnected()) {
-                    updateState();
-                }
-
-                try {
-                    client.open(host);
-                } catch (IOException e) {
-                    Log.w(TAG, "Failed to connect to " + host, e);
-                }
-
-                handler.postDelayed(this, 1000);
-            }
-
-            void updateState() {
-                client.request("core.playback.get_time_position", response -> {
-                    position = response.getAsLong();
-                    setPosition(position);
-
-                    stateBuilder.setState(playbackState, position, PLAYBACK_SPEED);
-                    mSession.setPlaybackState(stateBuilder.build());
-                });
-            }
-        };
-        updateState.run();
-
         mSession = new MediaSessionCompat(this, "MopidyService");
         setSessionToken(mSession.getSessionToken());
         mSession.setCallback(new MediaSessionCallback());
@@ -129,7 +147,8 @@ public class MopidyService extends MediaBrowserServiceCompat {
                         MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS |
                         MediaSessionCompat.FLAG_HANDLES_QUEUE_COMMANDS);
 
-        synchronizeInterface();
+        this.updateState.start(host);
+        updateState.run();
     }
 
     void synchronizeInterface() {
@@ -260,25 +279,28 @@ public class MopidyService extends MediaBrowserServiceCompat {
             }
 
             if (album.has("num_tracks")) {
-                Long trackTotal = album.get("num_tracks").getAsLong();
+                long trackTotal = album.get("num_tracks").getAsLong();
                 builder.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, trackTotal);
             }
 
             if (album.has("date")) {
-                Long year = Long.parseLong(album.get("date").getAsString().substring(0, 3));
+                long year = Long.parseLong(album.get("date").getAsString().substring(0, 3));
                 builder.putLong(MediaMetadata.METADATA_KEY_YEAR, year);
             }
         }
 
         if (track.has("track_no")) {
-            Long trackNumber = track.get("track_no").getAsLong();
+            long trackNumber = track.get("track_no").getAsLong();
             builder.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, trackNumber);
         }
 
         if (track.has("length")) {
-            Long duration = track.get("length").getAsLong();
+            long duration = track.get("length").getAsLong();
             builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
         }
+
+        // send the metadata in case there's no album art
+        mSession.setMetadata(builder.build());
 
         client.request(
                 new MopidyRequest(
@@ -287,18 +309,16 @@ public class MopidyService extends MediaBrowserServiceCompat {
                         response1 -> {
                             JsonArray images = response1.getAsJsonObject().get(trackId).getAsJsonArray();
                             for (JsonElement imageInfo : images) {
+                                String imageUrl = imageInfo.getAsJsonObject().get("uri").getAsString();
+                                client.getBitmapFromURL(imageUrl, (albumArt -> {
+                                    if (albumArt == null) {
+                                        return;
+                                    }
 
-                                String imageUrl = host + imageInfo.getAsJsonObject().get("uri").getAsString();
-                                Bitmap albumArt = client.getBitmapFromURL(imageUrl);
-                                if (albumArt == null) {
-                                    continue;
-                                }
-
-                                builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, albumArt);
-                                break;
+                                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, albumArt);
+                                    mSession.setMetadata(builder.build());
+                                }));
                             }
-
-                            mSession.setMetadata(builder.build());
                         })
         );
     }
@@ -306,10 +326,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
     @Override
     public void onDestroy() {
         Log.i(TAG, "onDestroy");
-        if (this.updateState != null) {
-            this.updateState.stop();
-            this.updateState = null;
-        }
+        this.updateState.stop();
 
         if (this.client != null) {
             this.client.close();
