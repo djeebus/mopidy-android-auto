@@ -115,7 +115,8 @@ public class FindBluetoothActivity extends Activity {
             client.open(host);
         }
         catch (IOException e) {
-            Log.w(TAG, "Failed to connect");
+            Log.w(TAG, "Failed to connect", e);
+            return;
         }
 
         client.request("core.get_version", response -> {

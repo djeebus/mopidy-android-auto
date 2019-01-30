@@ -52,12 +52,12 @@ public abstract class MopidyClient {
             }
         }
 
-        Log.i(TAG, "Sending: " + data);
+        Log.d(TAG, "Sending: " + data);
         this.send(data);
     }
 
     void handleMessage(String text) {
-        Log.i(TAG, "response: " + text);
+        Log.d(TAG, "response: " + text);
         Gson gson = new Gson();
         if (text.charAt(0) == '{') {
             text = "[" + text + "]";

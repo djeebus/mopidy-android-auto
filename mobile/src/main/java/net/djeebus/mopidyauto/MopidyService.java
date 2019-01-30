@@ -2,7 +2,6 @@ package net.djeebus.mopidyauto;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Bitmap;
 import android.media.MediaMetadata;
 import android.media.session.PlaybackState;
 import android.net.Uri;
@@ -40,6 +39,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
     class StateUpdater implements Runnable {
         private String host;
+        private boolean waitingForResponse = false;
 
         @Override
         public synchronized void run() {
@@ -57,10 +57,16 @@ public class MopidyService extends MediaBrowserServiceCompat {
         }
 
         private void updateState() {
+            if (this.waitingForResponse) {
+                return;
+            }
+
+            waitingForResponse = true;
             client.request("core.playback.get_time_position", response -> {
                 setPosition(response.getAsLong());
-                sendPlaybackState();
+                waitingForResponse = false;
             });
+
         }
 
         private void connect() {
@@ -81,8 +87,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
         void stop() {
             this.host = null;
         }
-
-        String getHost() { return this.host; }
     }
 
     private final Handler handler = new Handler();
@@ -98,11 +102,11 @@ public class MopidyService extends MediaBrowserServiceCompat {
     PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
             .setActions(
                     PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID |
-                            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
-                            PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                            PlaybackStateCompat.ACTION_PLAY_PAUSE |
-                            PlaybackStateCompat.ACTION_SET_REPEAT_MODE |
-                            PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE);
+                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
+                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
+                    PlaybackStateCompat.ACTION_PLAY_PAUSE |
+                    PlaybackStateCompat.ACTION_SET_REPEAT_MODE |
+                    PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE);
 
     int translateState(String state) {
         switch (state) {
@@ -162,7 +166,13 @@ public class MopidyService extends MediaBrowserServiceCompat {
                     mSession.setRepeatMode(result ? REPEAT_MODE_ALL : REPEAT_MODE_NONE);
                 }),
                 new MopidyRequest("core.playback.get_current_tl_track", this::processGetCurrentTrackListResponse),
-                new MopidyRequest("core.tracklist.get_tl_tracks", this::processRefreshTrackListResponse)
+                new MopidyRequest("core.tracklist.get_tl_tracks", this::processRefreshTrackListResponse),
+                new MopidyRequest("core.playback.get_state", response -> {
+                    this.setPlaybackState(translateState(response.getAsString()));
+                }),
+                new MopidyRequest("core.playback.get_time_position", response -> {
+                    this.setPosition(response.getAsLong());
+                })
         );
     }
 
@@ -195,6 +205,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
     private void sendPlaybackState() {
         this.stateBuilder.setState(this.playbackState, this.position, PLAYBACK_SPEED);
+
         mSession.setPlaybackState(stateBuilder.build());
     }
 
@@ -202,7 +213,6 @@ public class MopidyService extends MediaBrowserServiceCompat {
         switch (event) {
             case "seeked":
                 setPosition(jsonObject.get("time_position").getAsLong());
-                sendPlaybackState();
                 break;
 
             case "volume_changed":
@@ -332,7 +342,10 @@ public class MopidyService extends MediaBrowserServiceCompat {
             this.client.close();
         }
 
-        mSession.release();
+        if (this.mSession != null) {
+            mSession.release();
+            mSession = null;
+        }
     }
 
     @Override
@@ -468,7 +481,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
         public void onStop() {
             Log.i(TAG, "onStop");
 
-            client.request("core.playback.stop", response -> setPlaybackState(PlaybackState.STATE_STOPPED));
+            client.request("core.playback.pause", response -> setPlaybackState(PlaybackState.STATE_PAUSED));
         }
 
         @Override
