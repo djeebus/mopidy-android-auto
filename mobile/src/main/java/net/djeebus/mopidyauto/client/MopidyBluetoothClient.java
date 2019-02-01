@@ -227,7 +227,8 @@ public abstract class MopidyBluetoothClient extends MopidyClient {
     public void getBitmapFromURL(String uri, BitmapCallback callback) {
         this.request("btrpc.get_image_data", new GetImageDataRequest(uri),
                 response -> {
-                    if (response == null) {
+                    if (response == null || response.isJsonNull()) {
+                        callback.run(null);
                         return;
                     }
 

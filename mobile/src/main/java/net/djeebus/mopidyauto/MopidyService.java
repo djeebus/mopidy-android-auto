@@ -36,10 +36,11 @@ import static net.djeebus.mopidyauto.FindBluetoothActivity.PREFS_CONFIG;
 public class MopidyService extends MediaBrowserServiceCompat {
     private static final String TAG = "MopidyService";
     private static final float PLAYBACK_SPEED = 1.0f;
+    private static final long SILENCE_WINDOW = 5000L;
 
     class StateUpdater implements Runnable {
         private String host;
-        private boolean waitingForResponse = false;
+        private Long waitUntil = null;
 
         @Override
         public synchronized void run() {
@@ -57,16 +58,17 @@ public class MopidyService extends MediaBrowserServiceCompat {
         }
 
         private void updateState() {
-            if (this.waitingForResponse) {
+            long now = System.currentTimeMillis();
+
+            if (waitUntil != null && waitUntil > now) {
                 return;
             }
 
-            waitingForResponse = true;
+            waitUntil = now + SILENCE_WINDOW;
             client.request("core.playback.get_time_position", response -> {
                 setPosition(response.getAsLong());
-                waitingForResponse = false;
+                waitUntil = null;
             });
-
         }
 
         private void connect() {
@@ -101,10 +103,12 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
     PlaybackStateCompat.Builder stateBuilder = new PlaybackStateCompat.Builder()
             .setActions(
+                    PlaybackStateCompat.ACTION_PAUSE |
+                    PlaybackStateCompat.ACTION_PLAY |
                     PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID |
+                    PlaybackStateCompat.ACTION_PLAY_PAUSE |
                     PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS |
                     PlaybackStateCompat.ACTION_SKIP_TO_NEXT |
-                    PlaybackStateCompat.ACTION_PLAY_PAUSE |
                     PlaybackStateCompat.ACTION_SET_REPEAT_MODE |
                     PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE);
 
@@ -220,10 +224,14 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 jsonObject.get("volume").getAsInt();
                 break;
 
+            case "track_playback_started":
+                this.processGetCurrentTrackListResponse(jsonObject.get("tl_track"));
+                break;
+
             case "tracklist_changed":
                 this.client.request(
-                        new MopidyRequest("core.playback.get_current_tl_track", this::processGetCurrentTrackListResponse),
-                        new MopidyRequest("core.tracklist.get_tl_tracks", this::processRefreshTrackListResponse)
+                        "core.tracklist.get_tl_tracks",
+                        this::processRefreshTrackListResponse
                 );
                 break;
 
@@ -232,7 +240,8 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 setPlaybackState(translateState(newState));
 
                 client.request(
-                        "core.playback.get_current_tl_track", this::processGetCurrentTrackListResponse
+                        "core.playback.get_current_tl_track",
+                        this::processGetCurrentTrackListResponse
                 );
                 break;
 
@@ -251,6 +260,8 @@ public class MopidyService extends MediaBrowserServiceCompat {
         }
     }
 
+    MediaMetadataCompat.Builder metadataBuilder = new MediaMetadataCompat.Builder();
+
     void processGetCurrentTrackListResponse(JsonElement response) {
         if (response.isJsonNull()) {
             mSession.setMetadata(null);
@@ -260,12 +271,11 @@ public class MopidyService extends MediaBrowserServiceCompat {
         JsonObject track = response.getAsJsonObject().get("track").getAsJsonObject();
         String trackId = track.get("uri").getAsString();
 
-        MediaMetadataCompat.Builder builder = new MediaMetadataCompat.Builder()
-                .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, trackId);
+        metadataBuilder.putString(MediaMetadata.METADATA_KEY_MEDIA_ID, trackId);
 
         if (track.has("name")) {
             String trackName = track.get("name").getAsString();
-            builder.putString(MediaMetadata.METADATA_KEY_TITLE, trackName);
+            metadataBuilder.putString(MediaMetadata.METADATA_KEY_TITLE, trackName);
         }
 
         if (track.has("artists")) {
@@ -277,7 +287,7 @@ public class MopidyService extends MediaBrowserServiceCompat {
                 JsonObject artist = artists.get(0).getAsJsonObject();
                 artistName = artist.get("name").getAsString();
             }
-            builder.putString(MediaMetadata.METADATA_KEY_ARTIST, artistName);
+            metadataBuilder.putString(MediaMetadata.METADATA_KEY_ARTIST, artistName);
         }
 
         if (track.has("album")) {
@@ -285,32 +295,34 @@ public class MopidyService extends MediaBrowserServiceCompat {
 
             if (track.has("name")) {
                 String albumName = album.get("name").getAsString();
-                builder.putString(MediaMetadata.METADATA_KEY_ALBUM, albumName);
+                metadataBuilder.putString(MediaMetadata.METADATA_KEY_ALBUM, albumName);
             }
 
             if (album.has("num_tracks")) {
                 long trackTotal = album.get("num_tracks").getAsLong();
-                builder.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, trackTotal);
+                metadataBuilder.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, trackTotal);
             }
 
             if (album.has("date")) {
                 long year = Long.parseLong(album.get("date").getAsString().substring(0, 3));
-                builder.putLong(MediaMetadata.METADATA_KEY_YEAR, year);
+                metadataBuilder.putLong(MediaMetadata.METADATA_KEY_YEAR, year);
             }
         }
 
         if (track.has("track_no")) {
             long trackNumber = track.get("track_no").getAsLong();
-            builder.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, trackNumber);
+            metadataBuilder.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, trackNumber);
         }
 
         if (track.has("length")) {
             long duration = track.get("length").getAsLong();
-            builder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
+            metadataBuilder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration);
         }
 
         // send the metadata in case there's no album art
-        mSession.setMetadata(builder.build());
+
+        mSession.setMetadata(metadataBuilder.build());
+        metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, null);
 
         client.request(
                 new MopidyRequest(
@@ -325,8 +337,8 @@ public class MopidyService extends MediaBrowserServiceCompat {
                                         return;
                                     }
 
-                                    builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, albumArt);
-                                    mSession.setMetadata(builder.build());
+                                    metadataBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, albumArt);
+                                    mSession.setMetadata(metadataBuilder.build());
                                 }));
                             }
                         })
